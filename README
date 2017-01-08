@@ -1,0 +1,184 @@
+The source files present in this directory consists of source-code to add a new system call Xmergesort() to the linux kernel. This system call is used for sorting the strings present in two input input files and generating another output file.
+
+ --------------
+| Source files |
+ -------------- 
+As specified all the source files are present in this directory. Please see below for details file descriptions
+1) xmergesort.c - This is a user-application which invokes the xmergesort() system call.
+
+2) sys_xmergesort.c - This file consists of static kernel code i.e function pointer and actual xmergesort() system call and is burned into the kernel. The function pointer is exposed out, so that the loadable module can change the address to make it point to the implementation in loadable module. The actual xmergesort() system call just invokes the function pointed by the function pointer.
+
+3) Makefile - This file has commands to compile the static kernel code as well as the loadable kernel module.
+
+4) kernel.config - As specified, I have tried to build kernel with minimum configuration. I have used www.kernel-seeds.org to find out the exact hardware devices that are present in the virtual machine. Using that information, I have included only drivers relating to the hardware configuration. 
+
+5)cse506-syscall.patch : This file is used to update the system call table so that new system call can be inserted into the kernel as kernel module
+
+
+
+ -------------
+| Executables |
+ -------------
+Executing "make" on kernel tree produces sys_xmersort.o, sys_xmergesort.ko,xmergesort and some intermediate files.
+1) sys_xmergesort.ko - this has to be inserted/removed manually using shell script file "install_module.sh"
+2.)install_module.sh - This file consists of shell commands to insert sys_xmergesort.ko as a module in the kernel.
+   insmod sys_xmergesort.ko - for inserting the module
+   rmmod sys_xmergesort.ko - for removing the module
+   
+3) xmergesort is the user program which invokes the system call. Instructions for executing this program are explained below.
+NOTE: Occasionally upon executing "insmod sys_xmergesort.ko", it says "module verification failed: signature and/or required key missing - tainting kernel
+t".
+I have included module license as GPL and also tried several things such as replacing KERN_INFO with KERN_ALERT in printk but this is still not resolved. However, the module is inserted and works properly.
+
+Executing "make clean" in this directory will remove all the intermediate files and output files.
+
+  -------------------------------------------------------------
+| Steps to be followed for compiling and executing this project |
+  -------------------------------------------------------------
+1) Check-out the repository from GIT. Navigate to the checked-out path.
+2) Either copy kernel.config present in this directory to .config in kernel (or) use "make" by specifying config file.
+3) Run "make modules_install".
+4) Run "make install".
+5) Reboot the kernel and login to the new kernel.
+7) Navigate to the checked-out path
+8) Run patch -p1 < cse506-syscall.patch 
+
+patch program is not installed on the rpm family by default.Run "yum install patch" to install the patch program.
+The above steps are to be done only one-time. This will result in burning the static kernel code, compiling the loadable kernel module.
+
+
+ ------------------------------------------------
+| Compiling the user-application (i.e xmergesort.c) |
+ ------------------------------------------------
+ 
+Executing "make" in this directory will compile user-application. But alternatively, if we want to compile then 
+Execute the below command to compile the user-application:
+gcc -Wall -Werror xmergesort.c -o xmergesort -lssl -Iusr/src/linux-headers/include
+
+
+ -------------------------------------------------
+| Executing the user-application (i.e. xmergesort.o) |
+ -------------------------------------------------
+./xmergesort {-a|-u} [-it ] outfile infile1 infile2
+{-e|-d} : Mandatory option. Use either -a to sort normally OR -u to merge keeping the unique character. Do not use both.
+[-i,t ] : use i to merge the file without considering the cases and t when input files are to be considered in sorted order
+ 
+outfile : Output file (or path) where the merged file will be produced depending on {-a|-u} option.
+infile1 : Input file name (or path) to be merged along with infile2.
+infile2 : Input file name (or path) to be merged along with infile1.
+
+ ----------------------
+| Design Considerations |
+ ----------------------
+The system call is added by hooking a function pointer, exporting the symbol of it to access it outside the kernel. Thus we can modify the address to which the function pointer to make it point to the function in loadable kernel module.
+
+	     -----------------------------------
+	    |    User-level Program (xmergesort.c) |
+	    |    syscall(__NR_xmergesort, args)    |
+	     -----------------------------------
+				|
+				|
+		  -------------------------------------------------------------
+		|   Static kernel code (xmergesort.c)   |  sys_xmergesort(args)|
+         ______________________________________________________________
+                                | Pointer to the function present in loadable
+                                | kernel module
+		 ---------------------------------------------
+		|	Loadable Kernel Module (sys_xmergesort.c) |  
+		|	sys_xmergesort()						  |	
+		 ---------------------------------------------
+		 
+Architecture of implementing system call using loadable kernel module.
+_______________________________________________________________________
+   
+Parameters:
+The system call accepts arguments as a pointer to the structure . Please see below for several fields present in the structure.
+typedef struct myargs {
+    char  files[3][1024]; /*array to hold the 3 files, output, input1 & input2
+	char flags;			/* to store the flags*/
+	int *data;			/* to store the data returned from kernel*/
+}myargs;
+
+
+Return value:
+On success, it returns 0. The system call also imposes several error-checking mechanisms and sets nearly closest error number to "errno" which could be extracted using perror(). I tried porting the the nearest possible error codes. Below error codes slightly deviate from the meaning. The user program has to interpret the following error codes as specified below
+
+EPERM (ERRNO 1):  Problem with the input data
+ENOENT (ERRNO 2): Input file doesnot exist or not accessible
+EFAULT (ERRNO 14): Parameters are not accesible or NULL 
+EINVAL (ERRNO 22): Unable to merge files
+
+File names (path):
+The maximum allowable file name or path is 1024.
+
+
+Input and Output files:
+The system call performs several checks before actually merging the files. It checks the following
+1) Input file exists and is accessible to read.
+2) Input file and output file are not same. I am checking the inode numbers of both the files.
+3) Output file if exists will be over-written. So the user application must be very careful. If the output file does not exists, it will be created.
+4) The system call supports merging 0 byte files.
+5) Output file will be created with the permissions same as input file. I have used the "i_mode" field present in the input file inode for creating the output file. 
+
+Userland Operations:
+a) extracts the flags and file names from the command line operations.
+b) Check for the validity of the flags for example flag combination a & u are not allowed, whether a flag is present in the argument
+c) check for the correct number of input file and output file has been given.
+d) On completion of the syscall, it checks whether syscall was successful or not.
+e) Print the results on the screen,( execution result and data if d flag is set).
+
+
+Kernel Operations:
+a) Syscall first performs initial check on input,whether the input argument is accessible or not.
+b) It then checks for the valid flag combination, it received
+c) It then opens the input files and create a temporary output file to write the data.
+
+d) Merging is done as per the flags provided by the user
+e) After successful merge, if flag d is set # of records written will be copied back to the userspace via copy_to_user function.
+f) At the end it renames the temporary file to the output file with the permission of the input file provided.
+
+
+Merging Design:
+_______________________
+
+If both the files will have the data it will call the xmergesortInternal to perform the merging as per the flags. xmergesortInternal will then allocate 6  following buffers of size PAGESIZE each.Reason for choosing buffer size as PAGESIZE is to avoid multiple diskread.
+1.Kbuf1	: to store the data from input file1
+2.kbuf2	: to store the data from input file2
+3.kbuf3 : to store the merged data to be written to output file
+4.Str_from1: to compute the strings ending with \n from kbuf1.
+5.str_from2: to compute the strings ending with \n from kbuf2.
+6.temp_buf: to store the last written data to the kbuf3 for history purpose.
+
+once we have data in both str_from1 & str_from2 we will start comparing as follows:
+
+if flag a is set
+		if flag i is set
+			if flag t is set
+				
+					perform caseinsensitive comparison 
+					if current data is >= last written data, write it to the buffer, else throw the error since files are not sorted
+			else case of a & i flag:
+					perform case insensitive comparison
+					if current data is >= last written data, write it on to the output buffer, else ignore the current data and fill the string buffers again
+		else case of only a flag is set:
+					perform normal comparision
+					if current data is >=ast written data, write it on to the output buffer, else ignore the current data and fill the string buffers again
+
+if flag u is set
+		if	flag i is set
+			if flag t is set
+					perform case insensitive comparison
+					if two strings are similar discard the one present in the second file and compare the current string with the  last written data(as per the u flag guideline),if current data is >last written data, write it to the buffer, else throw the error since files are not sorted
+			else case of a & i flag:
+					perform case insensitive comparison
+					if two strings are similar discard the one present in the second file and compare the current string with the  last written data(as per the u flag guideline),if current data is >last written data, write it to the buffer, else ignore the current data and fill the string buffers again
+		else case of only a flag is set:
+					perform normal comparision
+					if two strings are similar discard the one present in the second file and compare the current string with the  last written data(as per the u flag guideline),if current data is >last written data, write it to the buffer, else ignore the current data and fill the string buffers again
+
+One more important thing to note here is that				
+If data from one of the file is left after comparison is finished,I have merged the left out data directly into the output file.
+
+
+Reference:
+-----------

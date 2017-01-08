@@ -1,0 +1,157 @@
+SE-506: implement dummy syscall for 64-bit architecture
+
+Signed-off-by: Erez Zadok <ezk@cs.sunysb.edu>
+diff --git a/arch/x86/entry/syscalls/syscall_64.tbl b/arch/x86/entry/syscalls/syscall_64.tbl
+index 8d656fb..9c6c11f 100644
+--- a/arch/x86/entry/syscalls/syscall_64.tbl
++++ b/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -329,6 +329,7 @@
+ 320	common	kexec_file_load		sys_kexec_file_load
+ 321	common	bpf			sys_bpf
+ 322	64	execveat		stub_execveat
++323	64	xmergesort			sys_xmergesort
+ 
+ #
+ # x32-specific system call numbers start at 512 to avoid cache impact
+diff --git a/fs/open.c b/fs/open.c
+index 44a3be1..029c496 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -1140,3 +1140,14 @@ int nonseekable_open(struct inode *inode, struct file *filp)
+ }
+ 
+ EXPORT_SYMBOL(nonseekable_open);
++
++asmlinkage long (*sysptr)(void *arg) = NULL;
++
++asmlinkage long sys_xmergesort(void *arg)
++{
++	if (sysptr != NULL)
++		return (*sysptr)(arg);
++	else
++		return -ENOTSUPP;
++}
++EXPORT_SYMBOL(sysptr);
+diff --git a/hw1/Makefile b/hw1/Makefile
+new file mode 100644
+index 0000000..1e4c446
+--- /dev/null
++++ b/hw1/Makefile
+@@ -0,0 +1,15 @@
++obj-m += sys_xmergesort.o
++
++INC=/lib/modules/$(shell uname -r)/build/arch/x86/include
++
++all: xhw1 xmergesort
++
++xhw1: xhw1.c
++	gcc -Wall -Werror -I$(INC)/generated/uapi -I$(INC)/uapi xhw1.c -o xhw1
++
++xmergesort:
++	make -Wall -Werror -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
++
++clean:
++	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
++	rm -f xhw1
+diff --git a/hw1/README b/hw1/README
+new file mode 100644
+index 0000000..fcf2c07
+--- /dev/null
++++ b/hw1/README
+@@ -0,0 +1 @@
++XXX: fill in
+diff --git a/hw1/install_module.sh b/hw1/install_module.sh
+new file mode 100755
+index 0000000..f13c5f3
+--- /dev/null
++++ b/hw1/install_module.sh
+@@ -0,0 +1,8 @@
++#!/bin/sh
++set -x
++# WARNING: this script doesn't check for errors, so you have to enhance it in case any of the commands
++# below fail.
++lsmod
++rmmod sys_xmergesort
++insmod sys_xmergesort.ko
++lsmod
+diff --git a/hw1/sys_xmergesort.c b/hw1/sys_xmergesort.c
+new file mode 100644
+index 0000000..9e967a0
+--- /dev/null
++++ b/hw1/sys_xmergesort.c
+@@ -0,0 +1,31 @@
++#include <linux/linkage.h>
++#include <linux/moduleloader.h>
++
++asmlinkage extern long (*sysptr)(void *arg);
++
++asmlinkage long xmergesort(void *arg)
++{
++	/* dummy syscall: returns 0 for non null, -EINVAL for NULL */
++	printk("xmergesort received arg %p\n", arg);
++	if (arg == NULL)
++		return -EINVAL;
++	else
++		return 0;
++}
++
++static int __init init_sys_xmergesort(void)
++{
++	printk("installed new sys_xmergesort module\n");
++	if (sysptr == NULL)
++		sysptr = xmergesort;
++	return 0;
++}
++static void  __exit exit_sys_xmergesort(void)
++{
++	if (sysptr != NULL)
++		sysptr = NULL;
++	printk("removed sys_xmergesort module\n");
++}
++module_init(init_sys_xmergesort);
++module_exit(exit_sys_xmergesort);
++MODULE_LICENSE("GPL");
+diff --git a/hw1/xhw1.c b/hw1/xhw1.c
+new file mode 100644
+index 0000000..8c4146c
+--- /dev/null
++++ b/hw1/xhw1.c
+@@ -0,0 +1,24 @@
++#include <asm/unistd.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <errno.h>
++#include <sys/syscall.h>
++#include <unistd.h>
++
++#ifndef __NR_xmergesort
++#error xmergesort system call not defined
++#endif
++
++int main(int argc, const char *argv[])
++{
++	int rc;
++	void *dummy = (void *) argv[1];
++
++  	rc = syscall(__NR_xmergesort, dummy);
++	if (rc == 0)
++		printf("syscall returned %d\n", rc);
++	else
++		printf("syscall returned %d (errno=%d)\n", rc, errno);
++
++	exit(rc);
++}
+diff --git a/include/linux/syscalls.h b/include/linux/syscalls.h
+index 76d1e38..a96b7e1 100644
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -205,6 +205,7 @@ extern struct trace_event_functions exit_syscall_print_funcs;
+ 	}								\
+ 	static inline long SYSC##name(__MAP(x,__SC_DECL,__VA_ARGS__))
+ 
++asmlinkage long sys_xmergesort(void *ptr);
+ asmlinkage long sys32_quotactl(unsigned int cmd, const char __user *special,
+ 			       qid_t id, void __user *addr);
+ asmlinkage long sys_time(time_t __user *tloc)
+
+;
